@@ -1,0 +1,23 @@
+# Verifies that bundle git provenance (origin_url, branch) is recorded when the bundle
+# lives in a Git folder. The provenance is read through two different code paths
+# (libs/git/info.go) depending on where the bundle is deployed from:
+#
+#   - Local / non-DBR runs read the on-disk .git directory (fetchRepositoryInfoDotGit).
+#   - RunsOnDbr runs on real DBR read it from the workspace get-status API
+#     (fetchRepositoryInfoAPI), because a /Workspace path has no usable on-disk .git.
+#
+# The script branches on DATABRICKS_RUNTIME_VERSION so both paths produce identical
+# output. Cloud=true is required because RunsOnDbr tests also run in the cloud suite.
+#
+# Note: a workspace Git folder created via `repos create` is a classic Repo, which
+# returns full git info inline from get-status. The id-only fallback for the new
+# in-workspace Git-folder model is covered by unit tests in libs/git/info_test.go;
+# that backend cannot be provisioned on demand from an acceptance test.
+Local = true
+Cloud = true
+RunsOnDbr = true
+
+# RunsOnDbr is incompatible with RecordRequests (serverless can't reach the proxy).
+RecordRequests = false
+
+Ignore = ["databricks.yml", "git-folder"]

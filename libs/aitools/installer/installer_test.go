@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,6 +61,15 @@ func setupFetchMock(t *testing.T) {
 	t.Cleanup(func() { fetchFileFn = orig })
 	fetchFileFn = func(_ context.Context, _, _, skillName, filePath string) ([]byte, error) {
 		return []byte("# " + skillName + "/" + filePath), nil
+	}
+}
+
+func stubLatestSkillsReleaseRef(t *testing.T, ref string, err error) {
+	t.Helper()
+	orig := latestSkillsReleaseRefFn
+	t.Cleanup(func() { latestSkillsReleaseRefFn = orig })
+	latestSkillsReleaseRefFn = func(context.Context) (string, error) {
+		return ref, err
 	}
 }
 
@@ -146,6 +157,51 @@ func TestBackupThirdPartySkillRegularDir(t *testing.T) {
 
 	// Clean up backup.
 	require.NoError(t, os.RemoveAll(filepath.Dir(filepath.Dir(matches[0]))))
+}
+
+func TestBackupThirdPartySkillCrossDeviceFallback(t *testing.T) {
+	ctx := cmdio.MockDiscard(t.Context())
+	tmp := t.TempDir()
+	skillName := "databricks-cross-device"
+
+	cleanupBackups := func() {
+		matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "databricks-skill-backup-"+skillName+"-*"))
+		for _, match := range matches {
+			_ = os.RemoveAll(match)
+		}
+	}
+	cleanupBackups()
+	t.Cleanup(cleanupBackups)
+
+	destDir := filepath.Join(tmp, "agent", "skills", skillName)
+	require.NoError(t, os.MkdirAll(destDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(destDir, "custom.md"), []byte("custom"), 0o644))
+
+	orig := renamePathFn
+	t.Cleanup(func() { renamePathFn = orig })
+	renameCalled := false
+	renamePathFn = func(oldpath, newpath string) error {
+		if oldpath == destDir {
+			renameCalled = true
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return os.Rename(oldpath, newpath)
+	}
+
+	err := backupThirdPartySkill(ctx, destDir, "/some/canonical", skillName, "Test Agent")
+	require.NoError(t, err)
+	assert.True(t, renameCalled)
+
+	_, err = os.Stat(destDir)
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "databricks-skill-backup-"+skillName+"-*", skillName, "custom.md"))
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	content, err := os.ReadFile(matches[0])
+	require.NoError(t, err)
+	assert.Equal(t, "custom", string(content))
 }
 
 func TestBackupThirdPartySkillSymlinkToOtherTarget(t *testing.T) {
@@ -301,6 +357,59 @@ func TestInstallSkillToDirCancelsInFlightFetchesOnError(t *testing.T) {
 	}
 }
 
+func TestInstallSkillToDirFetchErrorIncludesContextAndCleansTemp(t *testing.T) {
+	ctx := cmdio.MockDiscard(t.Context())
+
+	orig := fetchFileFn
+	t.Cleanup(func() { fetchFileFn = orig })
+
+	fetchErr := errors.New("HTTP 404")
+	fetchFileFn = func(_ context.Context, _, _, _, _ string) ([]byte, error) {
+		return nil, fetchErr
+	}
+
+	destDir := filepath.Join(t.TempDir(), "databricks-test")
+	_, err := installSkillToDir(ctx, testSkillsRef, stableSkillsRepoPath, "databricks-test", destDir, []string{"assets/databricks.png"})
+	require.ErrorIs(t, err, fetchErr)
+	assert.Contains(t, err.Error(), stableSkillsRepoPath+"/databricks-test/assets/databricks.png")
+	assert.Contains(t, err.Error(), testSkillsRef)
+
+	_, statErr := os.Stat(destDir)
+	assert.ErrorIs(t, statErr, fs.ErrNotExist)
+
+	matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(destDir), "."+filepath.Base(destDir)+"-*.tmp"))
+	require.NoError(t, globErr)
+	assert.Empty(t, matches)
+}
+
+func TestInstallSkillToDirFetchFailureKeepsExistingSkill(t *testing.T) {
+	ctx := cmdio.MockDiscard(t.Context())
+
+	orig := fetchFileFn
+	t.Cleanup(func() { fetchFileFn = orig })
+
+	fetchErr := errors.New("HTTP 404")
+	fetchFileFn = func(_ context.Context, _, _, _, filePath string) ([]byte, error) {
+		if filePath == "assets/databricks.png" {
+			return nil, fetchErr
+		}
+		return []byte("new"), nil
+	}
+
+	destDir := filepath.Join(t.TempDir(), "databricks-test")
+	require.NoError(t, os.MkdirAll(destDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(destDir, "SKILL.md"), []byte("old"), 0o644))
+
+	_, err := installSkillToDir(ctx, testSkillsRef, stableSkillsRepoPath, "databricks-test", destDir, []string{"SKILL.md", "assets/databricks.png"})
+	require.ErrorIs(t, err, fetchErr)
+
+	content, err := os.ReadFile(filepath.Join(destDir, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "old", string(content))
+	_, err = os.Stat(filepath.Join(destDir, "assets", "databricks.png"))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
 // --- InstallSkillsForAgents tests ---
 
 func TestInstallSkillsForAgentsWritesState(t *testing.T) {
@@ -330,6 +439,9 @@ func TestInstallSkillsForAgentsWritesState(t *testing.T) {
 	assert.NotEmpty(t, state.Files["databricks-sql/SKILL.md"].SHA256)
 	assert.Equal(t, testSkillsRef, state.Files["databricks-sql/SKILL.md"].Origin)
 
+	assert.Contains(t, stderr.String(), "Fetching skills manifest...")
+	assert.Contains(t, stderr.String(), "Downloading databricks-sql...")
+	assert.Contains(t, stderr.String(), "Exposing databricks-sql to 1 agent...")
 	assert.Contains(t, stderr.String(), "Installed 2 skills.")
 }
 
@@ -927,7 +1039,7 @@ func TestInstallKeepsNameWhenRepoDirChanges(t *testing.T) {
 func TestSupportsProjectScopeSetCorrectly(t *testing.T) {
 	expected := map[string]bool{
 		"claude-code": true,
-		"cursor":      true,
+		"cursor":      false,
 		"codex":       false,
 		"opencode":    false,
 		"copilot":     false,
@@ -941,19 +1053,64 @@ func TestSupportsProjectScopeSetCorrectly(t *testing.T) {
 	}
 }
 
-func TestGetSkillsRefResolvesFromManifest(t *testing.T) {
-	// Pre-populate the cache so FetchManifest returns from tier 1 (local cache)
-	// without hitting the network. The embedded manifest fallback is tested
-	// separately in clicompat_test.go.
-	cacheDir := t.TempDir()
-	t.Setenv("DATABRICKS_CACHE_DIR", cacheDir)
-	cachePath := filepath.Join(cacheDir, "compat-manifest.json")
-	manifest := `{"next":{"appkit":"0.24.0","skills":"0.1.5"},"0.300.0":{"appkit":"0.24.0","skills":"0.1.5"}}`
-	require.NoError(t, os.WriteFile(cachePath, []byte(manifest), 0o644))
+func TestGetSkillsRefDefaultsToLatest(t *testing.T) {
+	// cli-compat reports "latest", so we resolve it to the skills repo's
+	// latest release tag rather than tracking the default branch.
+	t.Setenv("DATABRICKS_SKILLS_REF", "")
+	withCachedCompat(t, skillsLatestSentinel)
+	stubLatestSkillsReleaseRef(t, "v0.2.8", nil)
+
+	ref, explicit, err := GetSkillsRef(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "v0.2.8", ref)
+	assert.False(t, explicit, "tracking latest is not an explicit pin")
+}
+
+func TestGetSkillsRefLatestReleaseFallsBackToEmbeddedPin(t *testing.T) {
+	t.Setenv("DATABRICKS_SKILLS_REF", "")
+	withCachedCompat(t, skillsLatestSentinel)
+	stubLatestSkillsReleaseRef(t, "", errors.New("network down"))
+
+	ref, explicit, err := GetSkillsRef(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "v0.2.9", ref)
+	assert.False(t, explicit, "an embedded fallback is not a user pin")
+}
+
+func TestGetSkillsRefEnvEscapeHatch(t *testing.T) {
+	t.Setenv("DATABRICKS_SKILLS_REF", "v9.9.9")
+
+	ref, explicit, err := GetSkillsRef(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "v9.9.9", ref)
+	assert.True(t, explicit, "an explicit ref is a pin")
+}
+
+func TestGetSkillsRefPinnedByCliCompat(t *testing.T) {
+	// cli-compat reports a concrete version: the remote safety valve pinning this
+	// CLI (e.g. after a future breaking change).
+	t.Setenv("DATABRICKS_SKILLS_REF", "")
+	withCachedCompat(t, "0.1.5")
 
 	ref, explicit, err := GetSkillsRef(t.Context())
 	require.NoError(t, err, "GetSkillsRef should succeed via cached manifest")
-	assert.False(t, explicit, "ref resolved from manifest should not be explicit")
-	assert.NotEmpty(t, ref)
-	assert.True(t, len(ref) > 1 && ref[0] == 'v', "ref should start with 'v', got %q", ref)
+	assert.Equal(t, "v0.1.5", ref)
+	assert.True(t, explicit, "a cli-compat pin is explicit")
+}
+
+func TestDisplaySkillsVersion(t *testing.T) {
+	assert.Equal(t, "0.2.5", DisplaySkillsVersion("v0.2.5"))
+	assert.Equal(t, "0.2.5", DisplaySkillsVersion("0.2.5"))
+	assert.Equal(t, "latest", DisplaySkillsVersion("latest"))
+}
+
+// withCachedCompat pre-populates the cli-compat cache so resolution is offline
+// and deterministic (a fresh local cache is tier 1, ahead of the network). A
+// single "0.0.0" entry matches every CLI version, including dev test builds.
+func withCachedCompat(t *testing.T, skills string) {
+	t.Helper()
+	cacheDir := t.TempDir()
+	t.Setenv("DATABRICKS_CACHE_DIR", cacheDir)
+	manifest := fmt.Sprintf(`{"0.0.0":{"appkit":"0.24.0","skills":%q}}`, skills)
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "compat-manifest.json"), []byte(manifest), 0o644))
 }

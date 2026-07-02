@@ -41,13 +41,8 @@ func pluginAgent(name, display, binary string) *agents.Agent {
 func claudeAgent() *agents.Agent { return pluginAgent(agents.NameClaudeCode, "Claude Code", "claude") }
 func codexAgent() *agents.Agent  { return pluginAgent(agents.NameCodex, "Codex CLI", "codex") }
 
-func cursorAgent() *agents.Agent {
-	return &agents.Agent{
-		Name:        agents.NameCursor,
-		DisplayName: "Cursor",
-		Binary:      "cursor-agent",
-		Plugin:      &agents.PluginSpec{ManualOnly: true, ManualInstructions: "run /add-plugin databricks in Cursor"},
-	}
+func noPluginAgent() *agents.Agent {
+	return &agents.Agent{Name: agents.NameOpenCode, DisplayName: "OpenCode", Binary: "opencode"}
 }
 
 func TestInstallPluginForAgentClaudeSuccess(t *testing.T) {
@@ -66,7 +61,35 @@ func TestInstallPluginForAgentClaudeSuccess(t *testing.T) {
 	cmds := stub.Commands()
 	assert.Contains(t, cmds, "claude plugin --help")
 	assert.Contains(t, cmds, "claude plugin marketplace add databricks/databricks-agent-skills")
+	assert.Contains(t, cmds, "claude plugin marketplace update")
 	assert.Contains(t, cmds, "claude plugin install databricks@databricks-agent-skills --scope user")
+}
+
+func TestInstallPluginForAgentBuiltinMarketplace(t *testing.T) {
+	stubAgentLookPath(t, true)
+	ctx, stub := process.WithStub(t.Context())
+	stub.WithCallback(func(*exec.Cmd) error { return nil })
+
+	// An agent whose plugin lives in a built-in marketplace (empty Source) like
+	// Claude's claude-plugins-official: install from it, never register it.
+	agent := &agents.Agent{
+		Name:        agents.NameClaudeCode,
+		DisplayName: "Claude Code",
+		Binary:      "claude",
+		Plugin:      &agents.PluginSpec{Marketplace: "claude-plugins-official", ID: "databricks", Source: ""},
+	}
+
+	rec, err := InstallPluginForAgent(ctx, agent, "user", "main")
+	require.NoError(t, err)
+	assert.Equal(t, "claude-plugins-official", rec.Marketplace)
+	assert.False(t, rec.InstalledMarketplace, "a built-in marketplace is never registered by us")
+
+	cmds := stub.Commands()
+	for _, c := range cmds {
+		assert.NotContains(t, c, "marketplace add", "must not register a built-in marketplace")
+	}
+	assert.Contains(t, cmds, "claude plugin marketplace update")
+	assert.Contains(t, cmds, "claude plugin install databricks@claude-plugins-official --scope user")
 }
 
 func TestInstallPluginForAgentCodexUsesAddNoScope(t *testing.T) {
@@ -84,11 +107,11 @@ func TestInstallPluginForAgentCodexUsesAddNoScope(t *testing.T) {
 	}
 }
 
-func TestInstallPluginForAgentManualOnly(t *testing.T) {
-	_, err := InstallPluginForAgent(t.Context(), cursorAgent(), "user", "v0.2.6")
+func TestInstallPluginForAgentNoPlugin(t *testing.T) {
+	_, err := InstallPluginForAgent(t.Context(), noPluginAgent(), "user", "v0.2.6")
 	var be *BlockedError
 	require.ErrorAs(t, err, &be)
-	assert.Equal(t, ReasonManualOnly, be.Reason)
+	assert.Equal(t, ReasonNoPlugin, be.Reason)
 }
 
 func TestInstallPluginForAgentCLINotOnPath(t *testing.T) {
@@ -145,12 +168,27 @@ func TestInstallPluginRollsBackMarketplaceOnInstallFailure(t *testing.T) {
 	assert.Contains(t, stub.Commands(), "claude plugin marketplace remove databricks-agent-skills")
 }
 
+func TestInstallPluginRollsBackMarketplaceOnRefreshFailure(t *testing.T) {
+	stubAgentLookPath(t, true)
+	ctx, stub := process.WithStub(t.Context())
+	stub.WithCallback(func(*exec.Cmd) error { return nil })
+	// Marketplace absent (empty list) so we add it; then the refresh fails.
+	stub.WithFailureFor("plugin marketplace update", errors.New("boom"))
+
+	_, err := InstallPluginForAgent(ctx, claudeAgent(), "user", "v0.2.6")
+	var be *BlockedError
+	require.ErrorAs(t, err, &be)
+	assert.Equal(t, ReasonInstallFailed, be.Reason)
+	// We added the marketplace, so a failed refresh must de-register it again.
+	assert.Contains(t, stub.Commands(), "claude plugin marketplace remove databricks-agent-skills")
+}
+
 func TestUpdatePluginForAgentCodexTwoStep(t *testing.T) {
 	stubAgentLookPath(t, true)
 	ctx, stub := process.WithStub(t.Context())
 	stub.WithCallback(func(*exec.Cmd) error { return nil })
 
-	require.NoError(t, UpdatePluginForAgent(ctx, codexAgent()))
+	require.NoError(t, UpdatePluginForAgent(ctx, codexAgent(), PluginRecord{Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user"}))
 	cmds := stub.Commands()
 	assert.Contains(t, cmds, "codex plugin marketplace upgrade")
 	assert.Contains(t, cmds, "codex plugin add databricks@databricks-agent-skills")
@@ -161,8 +199,25 @@ func TestUpdatePluginForAgentClaudeOneStep(t *testing.T) {
 	ctx, stub := process.WithStub(t.Context())
 	stub.WithCallback(func(*exec.Cmd) error { return nil })
 
-	require.NoError(t, UpdatePluginForAgent(ctx, claudeAgent()))
-	assert.Contains(t, stub.Commands(), "claude plugin update databricks@databricks-agent-skills")
+	require.NoError(t, UpdatePluginForAgent(ctx, claudeAgent(), PluginRecord{Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user"}))
+	cmds := stub.Commands()
+	assert.Contains(t, cmds, "claude plugin marketplace update")
+	assert.Contains(t, cmds, "claude plugin update databricks@databricks-agent-skills --scope user")
+}
+
+func TestUninstallPluginClaudeAlreadyDisabledContinues(t *testing.T) {
+	stubAgentLookPath(t, true)
+	ctx, stub := process.WithStub(t.Context())
+	stub.WithCallback(func(*exec.Cmd) error { return nil })
+	stub.WithStderrFor("plugin disable", "Plugin databricks is already disabled in user scope").
+		WithFailureFor("plugin disable", errors.New("exit status 1"))
+
+	rec := PluginRecord{Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user"}
+	require.NoError(t, UninstallPluginForAgent(ctx, claudeAgent(), rec, false))
+
+	cmds := stub.Commands()
+	assert.Contains(t, cmds, "claude plugin disable databricks@databricks-agent-skills --scope user")
+	assert.Contains(t, cmds, "claude plugin uninstall databricks@databricks-agent-skills --scope user")
 }
 
 func TestUninstallPluginDeregistersMarketplaceWhenInstalledByUs(t *testing.T) {
@@ -204,21 +259,81 @@ func TestUninstallSkillsOptsTearsDownPlugin(t *testing.T) {
 		SchemaVersion: schemaVersionV2,
 		Release:       "v0.2.6",
 		Plugins: map[string]PluginRecord{
-			agents.NameClaudeCode: {Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user", InstalledMarketplace: true},
+			agents.NameCopilot: {Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user", InstalledMarketplace: true},
 		},
 	}))
 
 	require.NoError(t, UninstallSkillsOpts(ctx, UninstallOptions{Scope: ScopeGlobal}))
 
 	cmds := stub.Commands()
-	assert.Contains(t, cmds, "claude plugin uninstall databricks@databricks-agent-skills")
-	assert.Contains(t, cmds, "claude plugin marketplace remove databricks-agent-skills")
+	assert.Contains(t, cmds, "copilot plugin uninstall databricks@databricks-agent-skills")
+	assert.Contains(t, cmds, "copilot plugin marketplace remove databricks-agent-skills")
 	assert.Contains(t, stderr.String(), "Uninstalled the plugin from 1 agent.")
 
 	// State file removed since nothing remains.
 	state, err := LoadState(dir)
 	require.NoError(t, err)
 	assert.Nil(t, state)
+}
+
+func TestUninstallSkillsOptsTargetsPluginAgents(t *testing.T) {
+	setupTestHome(t)
+	stubAgentLookPath(t, true)
+	ctx, stub := process.WithStub(t.Context())
+	stub.WithCallback(func(*exec.Cmd) error { return nil })
+	ctx = cmdio.MockDiscard(ctx)
+
+	dir, err := GlobalSkillsDir(ctx)
+	require.NoError(t, err)
+	require.NoError(t, SaveState(dir, &InstallState{
+		SchemaVersion: schemaVersionV2,
+		Release:       "v0.2.6",
+		Plugins: map[string]PluginRecord{
+			agents.NameClaudeCode: {Marketplace: "claude-plugins-official", Plugin: "databricks", Scope: "user"},
+			agents.NameCopilot:    {Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user"},
+		},
+	}))
+
+	require.NoError(t, UninstallSkillsOpts(ctx, UninstallOptions{Scope: ScopeGlobal, Agents: []string{agents.NameClaudeCode}}))
+
+	cmds := stub.Commands()
+	assert.Contains(t, cmds, "claude plugin uninstall databricks@claude-plugins-official --scope user")
+	for _, cmd := range cmds {
+		assert.NotContains(t, cmd, "copilot plugin uninstall")
+	}
+
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.NotContains(t, state.Plugins, agents.NameClaudeCode)
+	assert.Contains(t, state.Plugins, agents.NameCopilot)
+}
+
+func TestUninstallNeverDeregistersBuiltinMarketplace(t *testing.T) {
+	setupTestHome(t)
+	stubAgentLookPath(t, true)
+	ctx, stub := process.WithStub(t.Context())
+	stub.WithCallback(func(*exec.Cmd) error { return nil })
+	ctx = cmdio.MockDiscard(ctx)
+
+	dir, err := GlobalSkillsDir(ctx)
+	require.NoError(t, err)
+	// Claude installs from its built-in claude-plugins-official marketplace; even a
+	// stale InstalledMarketplace=true must never trigger a de-register.
+	require.NoError(t, SaveState(dir, &InstallState{
+		SchemaVersion: schemaVersionV2,
+		Plugins: map[string]PluginRecord{
+			agents.NameClaudeCode: {Marketplace: "claude-plugins-official", Plugin: "databricks", InstalledMarketplace: true},
+		},
+	}))
+
+	require.NoError(t, UninstallSkillsOpts(ctx, UninstallOptions{Scope: ScopeGlobal}))
+
+	cmds := stub.Commands()
+	assert.Contains(t, cmds, "claude plugin uninstall databricks@claude-plugins-official")
+	for _, c := range cmds {
+		assert.NotContains(t, c, "marketplace remove")
+	}
 }
 
 func TestUninstallKeepMarketplace(t *testing.T) {
@@ -233,7 +348,7 @@ func TestUninstallKeepMarketplace(t *testing.T) {
 	require.NoError(t, SaveState(dir, &InstallState{
 		SchemaVersion: schemaVersionV2,
 		Plugins: map[string]PluginRecord{
-			agents.NameClaudeCode: {Marketplace: "databricks-agent-skills", Plugin: "databricks", InstalledMarketplace: true},
+			agents.NameCopilot: {Marketplace: "databricks-agent-skills", Plugin: "databricks", InstalledMarketplace: true},
 		},
 	}))
 
@@ -281,7 +396,7 @@ func TestUninstallClearsRecordWhenMarketplaceRemoveFails(t *testing.T) {
 	require.NoError(t, SaveState(dir, &InstallState{
 		SchemaVersion: schemaVersionV2,
 		Plugins: map[string]PluginRecord{
-			agents.NameClaudeCode: {Marketplace: "databricks-agent-skills", Plugin: "databricks", InstalledMarketplace: true},
+			agents.NameCopilot: {Marketplace: "databricks-agent-skills", Plugin: "databricks", InstalledMarketplace: true},
 		},
 	}))
 
@@ -306,20 +421,76 @@ func TestUpdateInstalledPlugins(t *testing.T) {
 		SchemaVersion: schemaVersionV2,
 		Release:       "v0.2.6",
 		Plugins: map[string]PluginRecord{
-			agents.NameClaudeCode: {Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user", Version: "0.2.6"},
+			agents.NameCopilot: {Marketplace: "databricks-agent-skills", Plugin: "databricks", Scope: "user", Version: "0.2.6"},
 		},
 	}))
 
 	updated, err := UpdateInstalledPlugins(ctx, ScopeGlobal, "v0.2.7")
 	require.NoError(t, err)
 	require.Len(t, updated, 1)
-	assert.Equal(t, "Claude Code", updated[0].Agent)
+	assert.Equal(t, "GitHub Copilot", updated[0].Agent)
 	assert.Equal(t, "0.2.7", updated[0].Version)
-	assert.Contains(t, stub.Commands(), "claude plugin update databricks@databricks-agent-skills")
+	assert.Contains(t, stub.Commands(), "copilot plugin update databricks@databricks-agent-skills")
 
 	state, err := LoadState(dir)
 	require.NoError(t, err)
-	assert.Equal(t, "0.2.7", state.Plugins[agents.NameClaudeCode].Version)
+	assert.Equal(t, "0.2.7", state.Plugins[agents.NameCopilot].Version)
+}
+
+func TestUpdateInstalledPluginsUsesRecordedClaudeScope(t *testing.T) {
+	for _, scope := range []string{"project", "user", "local"} {
+		t.Run(scope, func(t *testing.T) {
+			setupTestHome(t)
+			stubAgentLookPath(t, true)
+			ctx, stub := process.WithStub(t.Context())
+			stub.WithCallback(func(*exec.Cmd) error { return nil })
+
+			dir, err := GlobalSkillsDir(ctx)
+			require.NoError(t, err)
+			require.NoError(t, SaveState(dir, &InstallState{
+				SchemaVersion: schemaVersionV2,
+				Release:       "v0.2.6",
+				Plugins: map[string]PluginRecord{
+					agents.NameClaudeCode: {Marketplace: "claude-plugins-official", Plugin: "databricks", Scope: scope, Version: "0.2.6"},
+				},
+			}))
+
+			updated, err := UpdateInstalledPlugins(ctx, ScopeGlobal, "v0.2.7")
+			require.NoError(t, err)
+			require.Len(t, updated, 1)
+
+			cmds := stub.Commands()
+			assert.Contains(t, cmds, "claude plugin marketplace update")
+			assert.Contains(t, cmds, "claude plugin update databricks@claude-plugins-official --scope "+scope)
+		})
+	}
+}
+
+func TestUninstallSkillsOptsUsesRecordedClaudeScope(t *testing.T) {
+	for _, scope := range []string{"project", "user", "local"} {
+		t.Run(scope, func(t *testing.T) {
+			setupTestHome(t)
+			stubAgentLookPath(t, true)
+			ctx, stub := process.WithStub(t.Context())
+			stub.WithCallback(func(*exec.Cmd) error { return nil })
+			ctx = cmdio.MockDiscard(ctx)
+
+			dir, err := GlobalSkillsDir(ctx)
+			require.NoError(t, err)
+			require.NoError(t, SaveState(dir, &InstallState{
+				SchemaVersion: schemaVersionV2,
+				Plugins: map[string]PluginRecord{
+					agents.NameClaudeCode: {Marketplace: "claude-plugins-official", Plugin: "databricks", Scope: scope},
+				},
+			}))
+
+			require.NoError(t, UninstallSkillsOpts(ctx, UninstallOptions{Scope: ScopeGlobal}))
+
+			cmds := stub.Commands()
+			assert.Contains(t, cmds, "claude plugin disable databricks@claude-plugins-official --scope "+scope)
+			assert.Contains(t, cmds, "claude plugin uninstall databricks@claude-plugins-official --scope "+scope)
+		})
+	}
 }
 
 func TestUninstallPluginKeepMarketplaceFlag(t *testing.T) {

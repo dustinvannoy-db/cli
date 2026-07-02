@@ -43,8 +43,9 @@ const (
 	ReasonCLINotOnPath = "cli-not-on-path"
 	// ReasonInstallFailed: the agent's plugin CLI ran but returned an error.
 	ReasonInstallFailed = "install-failed"
-	// ReasonManualOnly: the agent has a plugin but no headless install path (Cursor).
-	ReasonManualOnly = "manual-only"
+	// ReasonNoPlugin: the agent has no installable plugin. Callers filter these
+	// out; it is guarded here to avoid a nil dereference.
+	ReasonNoPlugin = "no-plugin"
 )
 
 func (e *BlockedError) Error() string {
@@ -93,6 +94,18 @@ func installTarget(spec *agents.PluginSpec) string {
 	return spec.ID + "@" + spec.Marketplace
 }
 
+func recordedInstallTarget(agent *agents.Agent, rec PluginRecord) string {
+	plugin := rec.Plugin
+	if plugin == "" {
+		plugin = agent.Plugin.ID
+	}
+	marketplace := rec.Marketplace
+	if marketplace == "" {
+		marketplace = agent.Plugin.Marketplace
+	}
+	return plugin + "@" + marketplace
+}
+
 // marketplaceAddArgs builds the `plugin marketplace add <source>` argv (sans binary).
 func marketplaceAddArgs(spec *agents.PluginSpec) []string {
 	return []string{"plugin", "marketplace", "add", spec.Source}
@@ -117,6 +130,24 @@ func marketplaceRemoveArgs(spec *agents.PluginSpec) []string {
 	return []string{"plugin", "marketplace", "remove", spec.Marketplace}
 }
 
+func marketplaceRemoveArgsForRecord(agent *agents.Agent, rec PluginRecord) []string {
+	marketplace := rec.Marketplace
+	if marketplace == "" {
+		marketplace = agent.Plugin.Marketplace
+	}
+	return []string{"plugin", "marketplace", "remove", marketplace}
+}
+
+// marketplaceUpdateArgs builds the marketplace refresh command for agents whose
+// plugin CLI supports it. Claude's official marketplace can be stale locally,
+// causing install/update to report that a published plugin does not exist.
+func marketplaceUpdateArgs(agent *agents.Agent) []string {
+	if agent.Name == agents.NameClaudeCode {
+		return []string{"plugin", "marketplace", "update"}
+	}
+	return nil
+}
+
 // pluginInstallArgs builds the per-agent install argv (sans binary). Codex uses
 // `plugin add`; Claude is the only agent that accepts `--scope`.
 func pluginInstallArgs(agent *agents.Agent, scope string) []string {
@@ -137,13 +168,18 @@ func pluginInstallArgs(agent *agents.Agent, scope string) []string {
 
 // pluginUpdateSteps builds the ordered per-agent update argv sets (sans binary).
 // Codex updates in two steps: refresh the marketplace, then re-add.
-func pluginUpdateSteps(agent *agents.Agent) [][]string {
-	target := installTarget(agent.Plugin)
+func pluginUpdateSteps(agent *agents.Agent, rec PluginRecord) [][]string {
+	target := recordedInstallTarget(agent, rec)
 	switch agent.Name {
 	case agents.NameCodex:
 		return [][]string{
 			{"plugin", "marketplace", "upgrade"},
 			{"plugin", "add", target},
+		}
+	case agents.NameClaudeCode:
+		return [][]string{
+			marketplaceUpdateArgs(agent),
+			appendScopeArg([]string{"plugin", "update", target}, rec.Scope),
 		}
 	default:
 		return [][]string{{"plugin", "update", target}}
@@ -152,14 +188,30 @@ func pluginUpdateSteps(agent *agents.Agent) [][]string {
 
 // pluginUninstallArgs builds the per-agent uninstall argv (sans binary).
 // Codex removes with `plugin remove`; the others use `plugin uninstall`.
-func pluginUninstallArgs(agent *agents.Agent) []string {
-	target := installTarget(agent.Plugin)
+func pluginUninstallArgs(agent *agents.Agent, rec PluginRecord) []string {
+	target := recordedInstallTarget(agent, rec)
 	switch agent.Name {
 	case agents.NameCodex:
 		return []string{"plugin", "remove", target}
+	case agents.NameClaudeCode:
+		return appendScopeArg([]string{"plugin", "uninstall", target}, rec.Scope)
 	default:
 		return []string{"plugin", "uninstall", target}
 	}
+}
+
+func pluginDisableArgs(agent *agents.Agent, rec PluginRecord) []string {
+	if agent.Name != agents.NameClaudeCode {
+		return nil
+	}
+	return appendScopeArg([]string{"plugin", "disable", recordedInstallTarget(agent, rec)}, rec.Scope)
+}
+
+func appendScopeArg(args []string, scope string) []string {
+	if scope == "" {
+		return args
+	}
+	return append(args, "--scope", scope)
 }
 
 // probePluginCLI resolves the agent's binary and confirms its CLI exposes the
@@ -180,8 +232,8 @@ func probePluginCLI(ctx context.Context, agent *agents.Agent) (string, error) {
 // plugin through the agent's own CLI, returning the record to persist in state.
 // It never falls back to skills: a blocked install returns a *BlockedError.
 func InstallPluginForAgent(ctx context.Context, agent *agents.Agent, nativeScope, ref string) (PluginRecord, error) {
-	if agent.Plugin == nil || agent.Plugin.ManualOnly {
-		return PluginRecord{}, &BlockedError{Agent: agent.Name, Reason: ReasonManualOnly}
+	if agent.Plugin == nil {
+		return PluginRecord{}, &BlockedError{Agent: agent.Name, Reason: ReasonNoPlugin}
 	}
 
 	bin, err := probePluginCLI(ctx, agent)
@@ -194,9 +246,26 @@ func InstallPluginForAgent(ctx context.Context, agent *agents.Agent, nativeScope
 	// our add succeeded, so we never remove a marketplace another plugin shares.
 	// On any uncertainty marketplaceRegistered returns true, keeping us off the
 	// de-register path.
-	alreadyPresent := marketplaceRegistered(ctx, bin, agent.Plugin.Marketplace)
-	_, addErr := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, marketplaceAddArgs(agent.Plugin)))
-	installedMarketplace := addErr == nil && !alreadyPresent
+	//
+	// An empty Source marks a built-in marketplace (e.g. Claude's
+	// claude-plugins-official): it is already registered, so we never add or
+	// de-register it.
+	installedMarketplace := false
+	if agent.Plugin.Source != "" {
+		alreadyPresent := marketplaceRegistered(ctx, bin, agent.Plugin.Marketplace)
+		_, addErr := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, marketplaceAddArgs(agent.Plugin)))
+		installedMarketplace = addErr == nil && !alreadyPresent
+	}
+	if args := marketplaceUpdateArgs(agent); args != nil {
+		if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, args)); err != nil {
+			if installedMarketplace {
+				if _, rmErr := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, marketplaceRemoveArgs(agent.Plugin))); rmErr != nil {
+					log.Warnf(ctx, "%s plugin marketplace refresh failed and the marketplace could not be de-registered: %v", agent.DisplayName, rmErr)
+				}
+			}
+			return PluginRecord{}, &BlockedError{Agent: agent.Name, Reason: ReasonInstallFailed, Detail: stderrOf(err)}
+		}
+	}
 
 	if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, pluginInstallArgs(agent, nativeScope))); err != nil {
 		// Roll back a marketplace we just added so a failed install doesn't
@@ -213,7 +282,7 @@ func InstallPluginForAgent(ctx context.Context, agent *agents.Agent, nativeScope
 		Marketplace:          agent.Plugin.Marketplace,
 		Plugin:               agent.Plugin.ID,
 		Scope:                nativeScope,
-		Version:              strings.TrimPrefix(ref, "v"),
+		Version:              DisplaySkillsVersion(ref),
 		InstalledMarketplace: installedMarketplace,
 	}, nil
 }
@@ -221,15 +290,15 @@ func InstallPluginForAgent(ctx context.Context, agent *agents.Agent, nativeScope
 // UpdatePluginForAgent updates the plugin through the agent's own CLI. The
 // plugin's own update handles content the release dropped, so there is no
 // per-skill prune for plugin agents.
-func UpdatePluginForAgent(ctx context.Context, agent *agents.Agent) error {
-	if agent.Plugin == nil || agent.Plugin.ManualOnly {
-		return &BlockedError{Agent: agent.Name, Reason: ReasonManualOnly}
+func UpdatePluginForAgent(ctx context.Context, agent *agents.Agent, rec PluginRecord) error {
+	if agent.Plugin == nil {
+		return &BlockedError{Agent: agent.Name, Reason: ReasonNoPlugin}
 	}
 	bin, err := resolveAgentBinary(agent)
 	if err != nil {
 		return &BlockedError{Agent: agent.Name, Reason: ReasonCLINotOnPath, Detail: err.Error()}
 	}
-	for _, args := range pluginUpdateSteps(agent) {
+	for _, args := range pluginUpdateSteps(agent, rec) {
 		if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, args)); err != nil {
 			return &BlockedError{Agent: agent.Name, Reason: ReasonInstallFailed, Detail: stderrOf(err)}
 		}
@@ -247,22 +316,33 @@ func UpdatePluginForAgent(ctx context.Context, agent *agents.Agent) error {
 // gone, so the record is cleared, and the leftover marketplace registration is
 // harmless and can be removed manually.
 func UninstallPluginForAgent(ctx context.Context, agent *agents.Agent, rec PluginRecord, keepMarketplace bool) error {
-	if agent.Plugin == nil || agent.Plugin.ManualOnly {
-		return &BlockedError{Agent: agent.Name, Reason: ReasonManualOnly}
+	if agent.Plugin == nil {
+		return &BlockedError{Agent: agent.Name, Reason: ReasonNoPlugin}
 	}
 	bin, err := resolveAgentBinary(agent)
 	if err != nil {
 		return &BlockedError{Agent: agent.Name, Reason: ReasonCLINotOnPath, Detail: err.Error()}
 	}
-	if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, pluginUninstallArgs(agent))); err != nil {
+	if args := pluginDisableArgs(agent, rec); args != nil {
+		if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, args)); err != nil && !claudeAlreadyDisabled(err) {
+			return &BlockedError{Agent: agent.Name, Reason: ReasonInstallFailed, Detail: stderrOf(err)}
+		}
+	}
+	if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, pluginUninstallArgs(agent, rec))); err != nil {
 		return &BlockedError{Agent: agent.Name, Reason: ReasonInstallFailed, Detail: stderrOf(err)}
 	}
-	if rec.InstalledMarketplace && !keepMarketplace {
-		if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, marketplaceRemoveArgs(agent.Plugin))); err != nil {
+	// Never de-register a built-in marketplace (empty Source, e.g. Claude's
+	// claude-plugins-official): it is shared infrastructure we did not add.
+	if rec.InstalledMarketplace && !keepMarketplace && agent.Plugin.Source != "" {
+		if _, err := runAgentCmd(ctx, pluginCmdTimeout, prepend(bin, marketplaceRemoveArgsForRecord(agent, rec))); err != nil {
 			log.Warnf(ctx, "Removed the %s plugin but could not de-register its marketplace (remove it manually if needed): %v", agent.DisplayName, stderrOf(err))
 		}
 	}
 	return nil
+}
+
+func claudeAlreadyDisabled(err error) bool {
+	return strings.Contains(strings.ToLower(stderrOf(err)), "already disabled")
 }
 
 // RecordPluginInstalls persists plugin install records into the state file for

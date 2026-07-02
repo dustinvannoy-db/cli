@@ -93,13 +93,9 @@ func makePostgresRoleRemote(role *postgres.Role) *PostgresRoleRemote {
 	if role.Spec != nil {
 		spec = *role.Spec
 	}
-	var roleID string
-	if role.Status != nil {
-		roleID = role.Status.RoleId
-	}
 	return &PostgresRoleRemote{
 		RoleRoleSpec: spec,
-		RoleId:       roleID,
+		RoleId:       role.RoleId,
 		Parent:       role.Parent,
 		Name:         role.Name,
 		Status:       role.Status,
@@ -132,6 +128,9 @@ func (r *ResourcePostgresRole) DoCreate(ctx context.Context, config *PostgresRol
 			UpdateTime:      nil,
 			ForceSendFields: nil,
 		},
+		// ReplaceExisting adopts an existing role with the same ID instead of
+		// returning ALREADY_EXISTS. Not exposed in bundle config, so always false.
+		ReplaceExisting: false,
 		ForceSendFields: nil,
 	})
 	if err != nil {

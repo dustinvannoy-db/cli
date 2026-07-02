@@ -20,5 +20,3 @@ RunsOnDbr = true
 
 # RunsOnDbr is incompatible with RecordRequests (serverless can't reach the proxy).
 RecordRequests = false
-
-Ignore = ["databricks.yml"]

@@ -1,3 +1,0 @@
-
-=== Bundle git provenance
-bundle.git matches the expectation for this environment (see LOG.git)

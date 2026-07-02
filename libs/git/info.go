@@ -124,7 +124,7 @@ func fetchRepositoryInfoAPI(ctx context.Context, path string, w *databricks.Work
 		if err != nil {
 			// Best effort: WorktreeRoot is already set, so degrade to partial info
 			// rather than failing the deploy (see FetchRepositoryInfo's contract).
-			log.Debugf(ctx, "Failed to load git info from Repos API for id %d: %v", gi.ID, err)
+			log.Warnf(ctx, "failed to load git info from Repos API for id %d: %v", gi.ID, err)
 			return result, nil
 		}
 		result.OriginURL = repo.Url

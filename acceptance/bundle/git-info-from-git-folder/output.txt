@@ -1,9 +1,0 @@
-
-=== Bundle git provenance
->>> [CLI] bundle validate -o json
-{
-  "origin_url": "https://github.com/databricks/databricks-empty-ide-project.git",
-  "branch": "main",
-  "actual_branch": "main",
-  "bundle_root_path": "."
-}

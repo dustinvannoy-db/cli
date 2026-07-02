@@ -1,0 +1,32 @@
+origin_url=https://github.com/databricks/databricks-empty-ide-project.git
+
+# The two environments cannot produce the same git provenance, so each branch asserts
+# its own exact expectation and output.txt only carries a constant confirmation line
+# (the actual bundle.git JSON is routed to LOG.git for debugging):
+#
+#   - Local / non-DBR: the bundle root is a real git repo with an origin remote; the
+#     CLI reads full provenance from the on-disk .git directory.
+#   - On DBR the bundle root is a plain /Workspace directory and no git source can
+#     exist there: git cannot operate on the workspace FUSE mount ("fatal: not in a
+#     git directory"), and Git folders created via the Repos API do not materialize
+#     on the FUSE mount within the session. The CLI reads provenance from the
+#     get-status API, which returns no git_info here, and must degrade to empty
+#     provenance without failing the command.
+if [ -n "${DATABRICKS_RUNTIME_VERSION:-}" ]; then
+    expected='{"origin_url":null,"branch":null,"bundle_root_path":"."}'
+else
+    git-repo-init > LOG.setup 2>&1
+    git remote add origin "$origin_url"
+    expected='{"origin_url":"'$origin_url'","branch":"main","bundle_root_path":"."}'
+fi
+
+title "Bundle git provenance\n"
+actual=$($CLI bundle validate -o json | jq -c '{origin_url: .bundle.git.origin_url, branch: .bundle.git.branch, bundle_root_path: .bundle.git.bundle_root_path}')
+echo "$actual" > LOG.git
+if [ "$actual" != "$expected" ]; then
+    echo "unexpected bundle.git: $actual (expected: $expected)"
+    exit 1
+fi
+echo "bundle.git matches the expectation for this environment (see LOG.git)"
+
+rm -rf .git

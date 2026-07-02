@@ -1,0 +1,24 @@
+# Verifies bundle git provenance recording (bundle.git) through both code paths of
+# libs/git/info.go FetchRepositoryInfo:
+#
+#   - Local / non-DBR runs read the on-disk .git directory (fetchRepositoryInfoDotGit)
+#     and record full provenance.
+#   - RunsOnDbr runs on real DBR read the workspace get-status API
+#     (fetchRepositoryInfoAPI). No git source can exist in the bundle root there (see
+#     the comment in script), so this variant asserts the API path degrades to empty
+#     provenance without failing the command.
+#
+# The id-only git_info fallback for the new in-workspace Git folder type cannot be
+# provisioned from a test (Repos-API-created folders don't appear on the FUSE mount,
+# and git cannot run on it); that path is covered by unit tests in
+# libs/git/info_test.go.
+#
+# Cloud=true is required because RunsOnDbr tests also run in the cloud suite.
+Local = true
+Cloud = true
+RunsOnDbr = true
+
+# RunsOnDbr is incompatible with RecordRequests (serverless can't reach the proxy).
+RecordRequests = false
+
+Ignore = ["databricks.yml"]

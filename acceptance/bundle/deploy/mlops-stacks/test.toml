@@ -1,5 +1,5 @@
 Cloud=true
-Local=false
+Local=true
 
 Badness = "the newly initialized bundle from the 'mlops-stacks' template contains two validation warnings in the configuration"
 
@@ -10,3 +10,7 @@ Ignore = [
 [[Repls]]
 Old = "aws|azure|gcp"
 New = "[CLOUD_ENV_BASE]"
+
+[[Repls]]
+Old = "bundle init .*/mlops-stacks/template"
+New = "bundle init mlops-stacks"

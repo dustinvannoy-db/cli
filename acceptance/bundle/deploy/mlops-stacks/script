@@ -20,11 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -z "$CLOUD_ENV" ]; then
-  trace $CLI bundle init "$TESTDIR/template" --config-file config.json
-else
-  trace $CLI bundle init mlops-stacks --config-file config.json
-fi
+trace $CLI bundle init "$TESTDIR/template" --config-file config.json
 trace cat test_repo_mlops_stacks/README.md | head -n 4
 
 cd "test_repo_mlops_stacks/project_name_${UNIQUE_NAME}" || exit 1

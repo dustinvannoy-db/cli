@@ -9,16 +9,11 @@ import (
 // New returns the local-env command group. The group, subgroup, and verb names
 // come from the single command-name constants in libs/localenv so a rename is a
 // one-location change (spec §0 / invariant 8).
-//
-// The command is Hidden while the feature lands across the stacked PRs: it is
-// wired and runnable for dogfooding, but stays out of help and completion until
-// the final PR unveils it (removes this flag, adds the help line and changelog).
 func New() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     libslocalenv.CommandGroup,
 		Short:   "Manage local development environments matched to Databricks compute",
 		GroupID: "development",
-		Hidden:  true,
 		Long: `Manage local development environments matched to a Databricks compute target.
 
 Derives the Python version, databricks-connect version, and dependency

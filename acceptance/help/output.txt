@@ -169,6 +169,7 @@ Environments
 
 Developer Tools
   bundle                                 Declarative Automation Bundles let you express data/AI/analytics projects as code.
+  local-env                              Manage local development environments matched to Databricks compute
   sync                                   Synchronize a local directory to a workspace directory
 
 Additional Commands:

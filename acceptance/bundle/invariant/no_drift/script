@@ -44,7 +44,7 @@ echo INPUT_CONFIG_OK
 
 # JSON plan asserts every action is "skip" -- a strict superset of the text
 # renderer's "Plan: 0 to add, 0 to change, 0 to delete" summary.
-# LOCAL_DIFF is either empty or "--local"; with --local the plan ignores the remote
+# LOCAL_DIFF is either empty or "--plan-mode=local"; the local mode ignores the remote
 # state of resources, so no drift means the local state saved by deploy matches config.
 $CLI bundle plan $LOCAL_DIFF -o json > LOG.planjson 2>LOG.planjson.err
 cat LOG.planjson.err | contains.py '!panic' '!internal error' > /dev/null

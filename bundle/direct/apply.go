@@ -42,7 +42,7 @@ func (d *DeploymentUnit) Deploy(ctx context.Context, db *dstate.DeploymentState,
 	case deployplan.Update:
 		return d.Update(ctx, db, oldID, newState, planEntry)
 	case deployplan.UpdateWithID:
-		return d.UpdateWithID(ctx, db, oldID, newState)
+		return d.UpdateWithID(ctx, db, oldID, newState, planEntry)
 	case deployplan.Resize:
 		return d.Resize(ctx, db, oldID, newState, planEntry)
 	default:
@@ -152,7 +152,7 @@ func (d *DeploymentUnit) Update(ctx context.Context, db *dstate.DeploymentState,
 	}
 
 	waitRemoteState, err := retryOnTransient(ctx, func() (any, error) {
-		return d.Adapter.WaitAfterUpdate(ctx, id, newState)
+		return d.Adapter.WaitAfterUpdate(ctx, id, newState, planEntry)
 	})
 	if err != nil {
 		return fmt.Errorf("waiting after updating id=%s: %w", id, err)
@@ -167,7 +167,7 @@ func (d *DeploymentUnit) Update(ctx context.Context, db *dstate.DeploymentState,
 	return nil
 }
 
-func (d *DeploymentUnit) UpdateWithID(ctx context.Context, db *dstate.DeploymentState, oldID string, newState any) error {
+func (d *DeploymentUnit) UpdateWithID(ctx context.Context, db *dstate.DeploymentState, oldID string, newState any, planEntry *deployplan.PlanEntry) error {
 	var newID string
 	var remoteState any
 	err := retryOnTransientErr(ctx, func() error {
@@ -196,7 +196,7 @@ func (d *DeploymentUnit) UpdateWithID(ctx context.Context, db *dstate.Deployment
 	}
 
 	waitRemoteState, err := retryOnTransient(ctx, func() (any, error) {
-		return d.Adapter.WaitAfterUpdate(ctx, newID, newState)
+		return d.Adapter.WaitAfterUpdate(ctx, newID, newState, planEntry)
 	})
 	if err != nil {
 		return fmt.Errorf("waiting after updating id=%s: %w", newID, err)

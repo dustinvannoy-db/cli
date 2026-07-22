@@ -90,7 +90,16 @@ func (p *Pipeline) Run(ctx context.Context) (*Result, error) {
 // run drives the phases and returns the first phase error. Result bookkeeping
 // (phase status, error object) is handled by fail / markOK.
 func (p *Pipeline) run(ctx context.Context) error {
-	// Phase: preflight — manager detection, writability, package-manager availability.
+	// Phase: preflight — flag validation, manager detection, writability,
+	// package-manager availability.
+	//
+	// Incompatible target flags are a usage error (E_USAGE), reported at preflight
+	// before any other work so the failure flows through the phase/JSON reporting
+	// (a plain Cobra mutual-exclusion error would print no command JSON object,
+	// which the --output json consumer needs).
+	if err := ValidateTargetFlags(p.Flags); err != nil {
+		return p.fail(PhasePreflight, false, NewError(ErrUsage, err, "invalid compute target flags"))
+	}
 	// P0 supports only uv; any other detected manager is a clean, non-blaming exit.
 	if m := detectManager(p.ProjectDir); m != managerUv {
 		return p.fail(PhasePreflight, false, NewError(ErrManagerUnsupported, nil, "%s", managerGuidance(m)))
@@ -347,7 +356,7 @@ func (p *Pipeline) provision(ctx context.Context, pyMinor string) error {
 	if err := p.PM.EnsurePython(ctx, pyMinor); err != nil {
 		return p.fail(PhaseProvision, true, asPipelineError(err, ErrPythonInstall, "ensure python %s failed", pyMinor))
 	}
-	if err := p.PM.Provision(ctx, p.ProjectDir); err != nil {
+	if err := p.PM.Provision(ctx, p.ProjectDir, pyMinor); err != nil {
 		return p.fail(PhaseProvision, true, asPipelineError(err, ErrProvision, "provision failed"))
 	}
 	if err := p.PM.PostProvision(ctx, p.ProjectDir); err != nil {
@@ -402,7 +411,11 @@ func (p *Pipeline) validate(ctx context.Context, expectedPyMinor, dbcPin string)
 	}
 	p.markOK(PhaseValidate, detail)
 
-	p.res.VenvPath = filepath.ToSlash(filepath.Join(p.ProjectDir, venvDir))
+	// venvPath is reported relative to the project root (spec §6.1), not as an
+	// absolute path: the value names the ".venv" the command provisions inside
+	// ProjectDir, and the VS Code consumer already knows the project root (it
+	// sets the working directory when it shells out). venvDir is already ".venv".
+	p.res.VenvPath = venvDir
 	if p.res.Resolved != nil {
 		if defaultMode {
 			p.res.Resolved.DBConnectVersion = dbcVer

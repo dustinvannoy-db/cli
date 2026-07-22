@@ -19,7 +19,7 @@ type fakePM struct{ py, dbc string }
 func (fakePM) Name() string                                    { return "fake" }
 func (fakePM) EnsureAvailable(context.Context) (string, error) { return "fake 1.0", nil }
 func (fakePM) EnsurePython(context.Context, string) error      { return nil }
-func (fakePM) Provision(context.Context, string) error         { return nil }
+func (fakePM) Provision(context.Context, string, string) error { return nil }
 func (fakePM) PostProvision(context.Context, string) error     { return nil }
 func (f fakePM) Validate(context.Context, string) (string, string, error) {
 	return f.py, f.dbc, nil
@@ -39,7 +39,7 @@ func (noProvisionPM) EnsurePython(context.Context, string) error {
 	return errors.New("EnsurePython must not be called under --dry-run")
 }
 
-func (noProvisionPM) Provision(context.Context, string) error {
+func (noProvisionPM) Provision(context.Context, string, string) error {
 	return errors.New("Provision must not be called under --dry-run")
 }
 
@@ -76,6 +76,25 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(sampleToml))
 	}))
+}
+
+func TestPipelineRejectsConflictingTargetFlagsAtPreflight(t *testing.T) {
+	// Incompatible target flags are a usage error surfaced as E_USAGE at
+	// preflight, before any manager/writability/fetch work.
+	dir := writeProject(t)
+	p := &Pipeline{
+		Mode: ModeDefault, Check: true, ProjectDir: dir, CacheDir: t.TempDir(),
+		Flags:   TargetFlags{Cluster: "abc", Serverless: "v4"},
+		Compute: stubCompute{}, PM: fakePM{py: "3.12", dbc: "17.2.0"},
+	}
+	res, err := p.Run(t.Context())
+	var pe *PipelineError
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, ErrUsage, pe.Code)
+	assert.Equal(t, PhasePreflight, pe.FailurePhase)
+	assert.False(t, pe.DiskMutated)
+	require.NotNil(t, res.Error)
+	assert.Equal(t, ErrUsage, res.Error.Code)
 }
 
 func TestPipelineCheckMutatesNothing(t *testing.T) {
@@ -205,7 +224,10 @@ func TestPipelineProvisionsAndValidatesExisting(t *testing.T) {
 	require.NotNil(t, res.Resolved)
 	assert.Equal(t, "3.12", res.Resolved.PythonVersion)
 	assert.Equal(t, "17.2.0", res.Resolved.DBConnectVersion)
-	assert.Equal(t, ".venv", filepath.Base(res.VenvPath))
+	// venvPath is reported relative to the project root (spec §6.1), so it is
+	// exactly ".venv" — not an absolute path under the temp ProjectDir. Asserting
+	// the full value (not just filepath.Base) is what pins the relative contract.
+	assert.Equal(t, ".venv", res.VenvPath)
 	merged, _ := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
 	assert.Contains(t, string(merged), `"databricks-connect~=17.2.0"`)
 	assert.FileExists(t, filepath.Join(dir, "pyproject.toml.bak"))

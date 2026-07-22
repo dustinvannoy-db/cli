@@ -1,0 +1,1 @@
+`aitools list` now reports every supported coding agent (both text and `--output json`) with its detection status (whether the CLI binary and config directory were found) and databricks plugin installation status and version.

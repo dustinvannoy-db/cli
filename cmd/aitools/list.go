@@ -75,16 +75,32 @@ type listOutput struct {
 	Agents  []agentEntry            `json:"agents,omitempty"`
 }
 
-// agentEntry reports per-agent plugin state for `list`. It mirrors skillEntry:
-// Installed maps scope -> the plugin recorded in that scope, so a stale scoped
-// install stays visible next to an up-to-date one. Managed says whether the CLI
-// installs and tracks the plugin. Up-to-date-ness is derived by comparing each
-// Installed version against the top-level release, exactly as the skills view
-// does, so there is no precomputed cross-scope status to keep in sync.
+// agentEntry reports per-agent state for `list`. Every supported agent in the
+// registry gets an entry so the VSCode extension can render the full set, not
+// just the ones with a recorded install.
+//
+// Detection uses the two cheap presence signals: BinaryDetected is the agent's
+// CLI binary on PATH (this is the "did we detect Claude Code / Codex" signal),
+// and ConfigDetected is its config dir on disk (the only signal for IDE-only
+// agents like Antigravity that have no CLI binary). Managed says whether the CLI
+// can install and track a databricks plugin for the agent.
+//
+// Installation is reported two ways: Installed maps CLI scope -> the plugin the
+// CLI recorded in that scope, so a stale scoped install stays visible next to an
+// up-to-date one, and up-to-date-ness is derived by comparing each version
+// against the top-level release exactly as the skills view does. PluginVersion /
+// PluginInstalled come from the agent's own plugin manifest, so an install done
+// directly through the agent's CLI (not via `databricks aitools install`) is
+// still reported.
 type agentEntry struct {
-	Name      string                `json:"name"`
-	Managed   bool                  `json:"managed"`
-	Installed map[string]pluginInfo `json:"installed,omitempty"`
+	Name            string                `json:"name"`
+	DisplayName     string                `json:"display_name"`
+	Managed         bool                  `json:"managed"`
+	BinaryDetected  bool                  `json:"binary_detected"`
+	ConfigDetected  bool                  `json:"config_detected"`
+	PluginInstalled bool                  `json:"plugin_installed"`
+	PluginVersion   string                `json:"plugin_version,omitempty"`
+	Installed       map[string]pluginInfo `json:"installed,omitempty"`
 }
 
 // pluginInfo is the per-scope plugin record surfaced in list output.
@@ -194,21 +210,34 @@ func buildListOutput(ctx context.Context, scope string) (listOutput, error) {
 	if projectState != nil {
 		states[installer.ScopeProject] = projectState
 	}
-	out.Agents = buildAgentEntries(states)
+	out.Agents = buildAgentEntries(ctx, states)
 
 	return out, nil
 }
 
-// buildAgentEntries reports per-agent plugin state: each plugin agent with a
-// recorded install (its version per scope). states maps scope -> install state
-// and must contain only non-nil states; the caller filters scopes it did not
-// load. Status across scopes is left for the renderer (and JSON consumers) to
-// derive from the per-scope versions, so no cross-scope record is merged away here.
-func buildAgentEntries(states map[string]*installer.InstallState) []agentEntry {
-	var entries []agentEntry
+// buildAgentEntries reports state for every supported agent in the registry:
+// detection (binary on PATH and config dir on disk), whether the CLI can manage
+// a databricks plugin for it, and installation status/version. states maps CLI
+// scope -> install state and must contain only non-nil states; the caller
+// filters scopes it did not load. Status across scopes is left for the renderer
+// (and JSON consumers) to derive from the per-scope versions, so no cross-scope
+// record is merged away here.
+func buildAgentEntries(ctx context.Context, states map[string]*installer.InstallState) []agentEntry {
+	entries := make([]agentEntry, 0, len(agents.Registry))
 	for _, a := range agents.Registry {
-		if a.Plugin == nil {
-			continue
+		entry := agentEntry{
+			Name:           a.Name,
+			DisplayName:    a.DisplayName,
+			Managed:        a.Plugin != nil,
+			BinaryDetected: a.HasBinary(ctx),
+			ConfigDetected: a.Detected(ctx),
+		}
+
+		// The agent's own plugin manifest records installs done directly through
+		// its CLI, which the CLI's per-scope state does not capture.
+		if version, ok := a.DatabricksPluginVersion(ctx); ok {
+			entry.PluginInstalled = true
+			entry.PluginVersion = version
 		}
 
 		installed := map[string]pluginInfo{}
@@ -218,8 +247,10 @@ func buildAgentEntries(states map[string]*installer.InstallState) []agentEntry {
 			}
 		}
 		if len(installed) > 0 {
-			entries = append(entries, agentEntry{Name: a.Name, Managed: true, Installed: installed})
+			entry.Installed = installed
 		}
+
+		entries = append(entries, entry)
 	}
 	return entries
 }
@@ -267,13 +298,13 @@ func renderListText(ctx context.Context, out listOutput, scope string) {
 	}
 
 	if len(out.Agents) > 0 {
-		cmdio.LogString(ctx, "Plugin installs:")
+		cmdio.LogString(ctx, "Agents:")
 		cmdio.LogString(ctx, "")
 		var ab strings.Builder
 		atw := tabwriter.NewWriter(&ab, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(atw, "  AGENT\tSTATUS")
+		fmt.Fprintln(atw, "  AGENT\tDETECTED\tSTATUS")
 		for _, a := range out.Agents {
-			fmt.Fprintf(atw, "  %s\t%s\n", agentDisplayName(a.Name), agentStatusLabel(a, out.Release))
+			fmt.Fprintf(atw, "  %s\t%s\t%s\n", a.DisplayName, agentDetectedLabel(a), agentStatusLabel(a, out.Release))
 		}
 		atw.Flush()
 		cmdio.LogString(ctx, ab.String())
@@ -305,17 +336,40 @@ func renderSkillTable(skills []skillEntry, bothScopes bool) string {
 	return buf.String()
 }
 
-// agentStatusLabel renders the text-view status for an agent, collapsing the
-// per-scope plugin records into a single line. A stale scope (version !=
+// agentDetectedLabel renders the detection column: which of the two cheap
+// presence signals fired. "cli" means the binary is on PATH, "config" means the
+// config dir exists; "no" means neither was found.
+func agentDetectedLabel(a agentEntry) string {
+	switch {
+	case a.BinaryDetected && a.ConfigDetected:
+		return "yes (cli, config)"
+	case a.BinaryDetected:
+		return "yes (cli)"
+	case a.ConfigDetected:
+		return "yes (config)"
+	default:
+		return "no"
+	}
+}
+
+// agentStatusLabel renders the text-view install status for an agent. Agents the
+// CLI can't manage a plugin for are marked files-only; managed agents with no
+// recorded install read "not installed". When an install exists, the per-scope
+// plugin records are collapsed into a single line: a stale scope (version !=
 // release) is surfaced over an up-to-date one so an outdated install is never
 // hidden; project is preferred when every scope matches release.
 func agentStatusLabel(a agentEntry, release string) string {
-	version, upToDate := "", true
+	if !a.Managed {
+		return "skills only"
+	}
+
+	version, upToDate, found := "", true, false
 	for _, scope := range []string{installer.ScopeProject, installer.ScopeGlobal} {
 		info, ok := a.Installed[scope]
 		if !ok {
 			continue
 		}
+		found = true
 		stale := info.Version != release
 		if version == "" || (upToDate && stale) {
 			version = info.Version
@@ -325,10 +379,22 @@ func agentStatusLabel(a agentEntry, release string) string {
 		}
 	}
 
-	if upToDate {
-		return "databricks plugin · " + versionToken(version) + " · up to date"
+	// Fall back to the agent's own plugin manifest when the CLI has no recorded
+	// install (e.g. the plugin was installed directly through the agent's CLI).
+	if !found {
+		if a.PluginInstalled {
+			if a.PluginVersion == release {
+				return "plugin · " + versionToken(a.PluginVersion) + " · up to date"
+			}
+			return "plugin · " + versionToken(a.PluginVersion) + " · update available"
+		}
+		return "plugin · not installed"
 	}
-	return "databricks plugin · " + versionToken(version) + " · update available"
+
+	if upToDate {
+		return "plugin · " + versionToken(version) + " · up to date"
+	}
+	return "plugin · " + versionToken(version) + " · update available"
 }
 
 func installedStatusFromEntry(s skillEntry, bothScopes bool) string {

@@ -5,7 +5,7 @@ print_state.py > out.original_state.json
 trace $CLI bundle deployment migrate 2>&1 | contains.py 'Migrated 1 resources'
 print_state.py > out.new_state.json
 
-# The empty grants node must not appear as an action; migrate promises no actions planned.
+# Empty grants must plan no action after migrate.
 trace DATABRICKS_BUNDLE_ENGINE=direct $CLI bundle plan | contains.py '0 to add' '1 unchanged'
 
 rm out.requests.txt

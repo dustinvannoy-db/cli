@@ -1,0 +1,31 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Top-level clusters [default, maintenance]; the target overrides `default`, so
+# the clusters sequence is split (2 locations) but pipeline clusters diff
+# positionally (no KeyedSlices) -> numeric change paths. Editing the maintenance
+# cluster (top-level block-local index 1) must resolve to the top-level
+# clusters[1], NOT be shifted or misclassified as a target element.
+resources:
+  pipelines:
+    my_pipeline:
+      name: test-pipeline-$UNIQUE_NAME
+      development: false
+      libraries:
+        - notebook:
+            path: /Users/{{workspace_user_name}}/notebook
+      clusters:
+        - label: default
+          num_workers: 1
+        - label: maintenance
+          num_workers: 1
+
+targets:
+  default:
+    mode: development
+    resources:
+      pipelines:
+        my_pipeline:
+          clusters:
+            - label: default
+              num_workers: 2

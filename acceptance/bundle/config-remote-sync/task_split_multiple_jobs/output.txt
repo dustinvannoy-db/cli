@@ -1,0 +1,49 @@
+Uploading bundle files to /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default/files...
+Deploying resources...
+Updating deployment state...
+Deployment complete!
+
+=== Set run_if on a_tgt (job_a target task)
+
+=== Set run_if on b_tgt (job_b target task)
+
+=== Detect and save changes
+Detected changes in 2 resource(s):
+
+Resource: resources.jobs.job_a
+  tasks[task_key='a_tgt'].run_if: replace
+
+Resource: resources.jobs.job_b
+  tasks[task_key='b_tgt'].run_if: replace
+
+
+
+=== Configuration changes
+
+>>> diff.py databricks.yml.backup databricks.yml
+--- databricks.yml.backup
++++ databricks.yml
+@@ -29,5 +29,5 @@
+           tasks:
+             - task_key: a_tgt
+-              run_if: ALL_SUCCESS
++              run_if: ALL_DONE
+               notebook_task:
+                 notebook_path: /Users/{{workspace_user_name}}/a_tgt
+@@ -35,5 +35,5 @@
+           tasks:
+             - task_key: b_tgt
+-              run_if: ALL_SUCCESS
++              run_if: ALL_DONE
+               notebook_task:
+                 notebook_path: /Users/{{workspace_user_name}}/b_tgt
+
+>>> [CLI] bundle destroy --auto-approve
+The following resources will be deleted:
+  delete resources.jobs.job_a
+  delete resources.jobs.job_b
+
+All files and directories at the following location will be deleted: /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default
+
+Deleting files...
+Destroy complete!

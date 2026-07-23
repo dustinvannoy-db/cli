@@ -1,0 +1,32 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Top-level block holds mmm_task, nnn_task; the target block holds aaa_task.
+# After MergeJobTasks sorts by task_key the merged order is aaa,mmm,nnn, so
+# nnn_task sits at merged index 2 but at top-level block index 1. Editing
+# nnn_task must resolve to the top-level block index 1, proving block-local
+# index arithmetic works beyond index 0.
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: mmm_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/mmm
+        - task_key: nnn_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/nnn
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa

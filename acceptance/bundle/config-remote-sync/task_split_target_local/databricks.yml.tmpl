@@ -1,0 +1,28 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Mirror of task_split_target_index: here the EDITED task lives in the target
+# block (aaa_tgt, target-local index 0) while a different task sits at the same
+# index 0 of the top-level block (zzz_top, which also has run_if). The remote
+# edit must land on aaa_tgt, not be misdirected to zzz_top via the unprefixed
+# candidate.
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: zzz_top
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/zzz
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_tgt
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa

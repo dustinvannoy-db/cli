@@ -1,0 +1,33 @@
+#!/bin/bash
+
+envsubst < databricks.yml.tmpl > databricks.yml
+
+cleanup() {
+  trace $CLI bundle destroy --auto-approve
+}
+trap cleanup EXIT
+
+$CLI bundle deploy
+pipeline_id="$(read_id.py my_pipeline)"
+
+# The maintenance cluster is defined in the targets block (target-local index
+# 0); the top-level block holds the default cluster. Editing the maintenance
+# cluster's num_workers must patch the targets block, proving block-aware
+# indexing works for pipeline clusters, a different resource type from jobs.
+title "Set num_workers on maintenance cluster remotely (target-block cluster)"
+echo
+edit_resource.py pipelines $pipeline_id <<EOF
+for cluster in r.get("clusters", []):
+    if cluster.get("label") == "maintenance":
+        cluster["num_workers"] = 3
+EOF
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

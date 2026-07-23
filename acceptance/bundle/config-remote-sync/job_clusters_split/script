@@ -1,0 +1,33 @@
+#!/bin/bash
+
+envsubst < databricks.yml.tmpl > databricks.yml
+
+cleanup() {
+  trace $CLI bundle destroy --auto-approve
+}
+trap cleanup EXIT
+
+$CLI bundle deploy
+job_id="$(read_id.py my_job)"
+
+# ccc_cluster is defined in the targets block (target-local index 0); the
+# top-level block holds aaa_cluster, bbb_cluster. Editing ccc_cluster's
+# num_workers must patch the targets block, proving block-aware indexing works
+# for the non-sorted job_clusters merge, not just tasks.
+title "Set num_workers on ccc_cluster remotely (target-block cluster)"
+echo
+edit_resource.py jobs $job_id <<EOF
+for cluster in r.get("job_clusters", []):
+    if cluster.get("job_cluster_key") == "ccc_cluster":
+        cluster["new_cluster"]["num_workers"] = 5
+EOF
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

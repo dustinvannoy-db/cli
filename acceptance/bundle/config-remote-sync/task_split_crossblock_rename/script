@@ -1,0 +1,27 @@
+#!/bin/bash
+envsubst < databricks.yml.tmpl > databricks.yml
+cleanup() { trace $CLI bundle destroy --auto-approve; }
+trap cleanup EXIT
+$CLI bundle deploy
+job_id="$(read_id.py my_job)"
+
+# Rename mmm_task (top block) and aaa_task (target block) in one sync. Each is
+# seen as remove old + add new. The adds must land back in their own block.
+title "Rename mmm_task->ppp_task (top) and aaa_task->qqq_task (target)"
+echo
+edit_resource.py jobs $job_id <<PY
+for task in r["tasks"]:
+    if task["task_key"] == "mmm_task":
+        task["task_key"] = "ppp_task"
+    if task["task_key"] == "aaa_task":
+        task["task_key"] = "qqq_task"
+PY
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

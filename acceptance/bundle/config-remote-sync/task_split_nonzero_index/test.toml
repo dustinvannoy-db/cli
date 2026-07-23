@@ -1,0 +1,10 @@
+# Local-only: edits a task at a non-zero position within its block to exercise
+# block-local index arithmetic beyond index 0.
+RecordRequests = false
+Ignore = [".databricks", "databricks.yml", "databricks.yml.backup"]
+
+[Env]
+DATABRICKS_BUNDLE_ENABLE_EXPERIMENTAL_YAML_SYNC = "true"
+
+[EnvMatrix]
+DATABRICKS_BUNDLE_ENGINE = ["direct", "terraform"]

@@ -1,0 +1,59 @@
+Uploading bundle files to /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default/files...
+Deploying resources...
+Updating deployment state...
+Deployment complete!
+
+=== Rename mmm_task->ppp_task (top) and aaa_task->qqq_task (target)
+
+=== Detect and save changes
+Detected changes in 1 resource(s):
+
+Resource: resources.jobs.my_job
+  tasks[task_key='aaa_task']: remove
+  tasks[task_key='mmm_task']: remove
+  tasks[task_key='ppp_task']: add
+  tasks[task_key='qqq_task']: add
+
+
+
+=== Configuration changes
+
+>>> diff.py databricks.yml.backup databricks.yml
+--- databricks.yml.backup
++++ databricks.yml
+@@ -11,12 +11,14 @@
+     my_job:
+       tasks:
+-        - task_key: mmm_task
+-          run_if: ALL_SUCCESS
+-          notebook_task:
++        - notebook_task:
+             notebook_path: /Users/{{workspace_user_name}}/mmm
++          task_key: ppp_task
+         - task_key: nnn_task
+           run_if: ALL_SUCCESS
+           notebook_task:
+             notebook_path: /Users/{{workspace_user_name}}/nnn
++        - notebook_task:
++            notebook_path: /Users/{{workspace_user_name}}/aaa
++          task_key: qqq_task
+
+ targets:
+@@ -26,7 +28,3 @@
+       jobs:
+         my_job:
+-          tasks:
+-            - task_key: aaa_task
+-              run_if: ALL_SUCCESS
+-              notebook_task:
+-                notebook_path: /Users/{{workspace_user_name}}/aaa
++          tasks: []
+
+>>> [CLI] bundle destroy --auto-approve
+The following resources will be deleted:
+  delete resources.jobs.my_job
+
+All files and directories at the following location will be deleted: /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default
+
+Deleting files...
+Destroy complete!

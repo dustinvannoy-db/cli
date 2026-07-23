@@ -1,0 +1,46 @@
+Uploading bundle files to /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default/files...
+Deploying resources...
+Updating deployment state...
+Deployment complete!
+
+=== Remove bbb_task (top block) AND eee_task (target block) remotely
+
+=== Detect and save changes
+Detected changes in 1 resource(s):
+
+Resource: resources.jobs.my_job
+  tasks[task_key='bbb_task']: remove
+  tasks[task_key='eee_task']: remove
+
+
+
+=== Configuration changes
+
+>>> diff.py databricks.yml.backup databricks.yml
+--- databricks.yml.backup
++++ databricks.yml
+@@ -12,8 +12,4 @@
+     my_job:
+       tasks:
+-        - task_key: bbb_task
+-          run_if: ALL_SUCCESS
+-          notebook_task:
+-            notebook_path: /Users/{{workspace_user_name}}/bbb
+         - task_key: ccc_task
+           run_if: ALL_SUCCESS
+@@ -32,6 +28,2 @@
+               notebook_task:
+                 notebook_path: /Users/{{workspace_user_name}}/aaa
+-            - task_key: eee_task
+-              run_if: ALL_SUCCESS
+-              notebook_task:
+-                notebook_path: /Users/{{workspace_user_name}}/eee
+
+>>> [CLI] bundle destroy --auto-approve
+The following resources will be deleted:
+  delete resources.jobs.my_job
+
+All files and directories at the following location will be deleted: /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default
+
+Deleting files...
+Destroy complete!

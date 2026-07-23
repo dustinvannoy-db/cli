@@ -1,0 +1,36 @@
+Uploading bundle files to /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default/files...
+Deploying resources...
+Updating deployment state...
+Deployment complete!
+
+=== Set run_if on nnn_task remotely (top-level block index 1)
+
+=== Detect and save changes
+Detected changes in 1 resource(s):
+
+Resource: resources.jobs.my_job
+  tasks[task_key='nnn_task'].run_if: replace
+
+
+
+=== Configuration changes
+
+>>> diff.py databricks.yml.backup databricks.yml
+--- databricks.yml.backup
++++ databricks.yml
+@@ -16,5 +16,5 @@
+             notebook_path: /Users/{{workspace_user_name}}/mmm
+         - task_key: nnn_task
+-          run_if: ALL_SUCCESS
++          run_if: ALL_DONE
+           notebook_task:
+             notebook_path: /Users/{{workspace_user_name}}/nnn
+
+>>> [CLI] bundle destroy --auto-approve
+The following resources will be deleted:
+  delete resources.jobs.my_job
+
+All files and directories at the following location will be deleted: /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default
+
+Deleting files...
+Destroy complete!

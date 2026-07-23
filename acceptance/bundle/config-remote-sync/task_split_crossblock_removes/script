@@ -1,0 +1,21 @@
+#!/bin/bash
+envsubst < databricks.yml.tmpl > databricks.yml
+cleanup() { trace $CLI bundle destroy --auto-approve; }
+trap cleanup EXIT
+$CLI bundle deploy
+job_id="$(read_id.py my_job)"
+
+title "Remove bbb_task (top block) AND eee_task (target block) remotely"
+echo
+edit_resource.py jobs $job_id <<PY
+r["tasks"] = [t for t in r["tasks"] if t["task_key"] not in ("bbb_task", "eee_task")]
+PY
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

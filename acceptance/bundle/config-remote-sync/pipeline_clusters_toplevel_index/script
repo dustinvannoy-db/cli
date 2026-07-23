@@ -1,0 +1,26 @@
+#!/bin/bash
+envsubst < databricks.yml.tmpl > databricks.yml
+cleanup() { trace $CLI bundle destroy --auto-approve; }
+trap cleanup EXIT
+$CLI bundle deploy
+pipeline_id="$(read_id.py my_pipeline)"
+
+# maintenance is the SECOND top-level cluster (block-local index 1). Its numeric
+# change path clusters[1] must patch the top-level maintenance cluster, leaving
+# the target `default` override untouched.
+title "Set num_workers on maintenance cluster (top-level block index 1)"
+echo
+edit_resource.py pipelines $pipeline_id <<PY
+for cluster in r.get("clusters", []):
+    if cluster.get("label") == "maintenance":
+        cluster["num_workers"] = 7
+PY
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

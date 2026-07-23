@@ -1,0 +1,39 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Two jobs, each with tasks split across the top-level block and the
+# targets.default override block. blockAnchor must group elements per sequence
+# (per job), not globally: editing job_a's target task and job_b's target task
+# in one sync must each patch their own targets block, never the other job's.
+resources:
+  jobs:
+    job_a:
+      tasks:
+        - task_key: a_top
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/a_top
+    job_b:
+      tasks:
+        - task_key: b_top
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/b_top
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        job_a:
+          tasks:
+            - task_key: a_tgt
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/a_tgt
+        job_b:
+          tasks:
+            - task_key: b_tgt
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/b_tgt

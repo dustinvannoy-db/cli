@@ -1,0 +1,37 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Split tasks: top-level [bbb, ccc], target [aaa, eee]. Merged+sorted =
+# aaa,bbb,ccc,eee. One sync removes bbb (top block-local idx 0) AND eee (target
+# block-local idx 1). Index-shift bookkeeping must be block-scoped: bbb's
+# top-level removal must NOT shift eee's target-block index. Otherwise eee's
+# index 1 would shift to 0 and, being flagged as a target-block element, patch
+# targets...tasks[0] = aaa. Correct result: bbb + eee removed, aaa + ccc kept.
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: bbb_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/bbb
+        - task_key: ccc_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/ccc
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa
+            - task_key: eee_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/eee

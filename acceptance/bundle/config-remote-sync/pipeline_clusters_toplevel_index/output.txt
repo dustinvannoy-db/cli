@@ -1,0 +1,40 @@
+Uploading bundle files to /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default/files...
+Deploying resources...
+Updating deployment state...
+Deployment complete!
+
+=== Set num_workers on maintenance cluster (top-level block index 1)
+
+=== Detect and save changes
+Detected changes in 1 resource(s):
+
+Resource: resources.pipelines.my_pipeline
+  clusters[1].num_workers: replace
+
+
+
+=== Configuration changes
+
+>>> diff.py databricks.yml.backup databricks.yml
+--- databricks.yml.backup
++++ databricks.yml
+@@ -19,5 +19,5 @@
+           num_workers: 1
+         - label: maintenance
+-          num_workers: 1
++          num_workers: 7
+
+ targets:
+
+>>> [CLI] bundle destroy --auto-approve
+The following resources will be deleted:
+  delete resources.pipelines.my_pipeline
+
+This action will result in the deletion of the following Lakeflow Spark Declarative Pipelines along with the
+Streaming Tables (STs) and Materialized Views (MVs) managed by them:
+  delete resources.pipelines.my_pipeline
+
+All files and directories at the following location will be deleted: /Workspace/Users/[USERNAME]/.bundle/test-bundle-[UNIQUE_NAME]/default
+
+Deleting files...
+Destroy complete!

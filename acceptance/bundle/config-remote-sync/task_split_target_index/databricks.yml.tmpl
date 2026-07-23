@@ -1,0 +1,34 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa
+
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: bbb_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/bbb
+          new_cluster:
+            spark_version: $DEFAULT_SPARK_VERSION
+            node_type_id: $NODE_TYPE_ID
+            num_workers: 1
+        - task_key: ccc_task
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/ccc
+          new_cluster:
+            spark_version: $DEFAULT_SPARK_VERSION
+            node_type_id: $NODE_TYPE_ID
+            num_workers: 1

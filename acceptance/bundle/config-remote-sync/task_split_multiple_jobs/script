@@ -1,0 +1,41 @@
+#!/bin/bash
+
+envsubst < databricks.yml.tmpl > databricks.yml
+
+cleanup() {
+  trace $CLI bundle destroy --auto-approve
+}
+trap cleanup EXIT
+
+$CLI bundle deploy
+job_a_id="$(read_id.py job_a)"
+job_b_id="$(read_id.py job_b)"
+
+# Edit the target-block task of BOTH jobs. Each edit must land in its own job's
+# targets block. If blockAnchor grouped elements globally instead of per
+# sequence, one job's index could bleed into the other.
+title "Set run_if on a_tgt (job_a target task)"
+echo
+edit_resource.py jobs $job_a_id <<EOF
+for task in r["tasks"]:
+    if task["task_key"] == "a_tgt":
+        task["run_if"] = "ALL_DONE"
+EOF
+
+title "Set run_if on b_tgt (job_b target task)"
+echo
+edit_resource.py jobs $job_b_id <<EOF
+for task in r["tasks"]:
+    if task["task_key"] == "b_tgt":
+        task["run_if"] = "ALL_DONE"
+EOF
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

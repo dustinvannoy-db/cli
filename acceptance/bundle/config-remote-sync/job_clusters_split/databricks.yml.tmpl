@@ -1,0 +1,41 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# job_clusters is merged by merge.ElementsByKey (NON-sorted, unlike tasks). The
+# sequence is still split across the top-level block (aaa_cluster, bbb_cluster)
+# and the targets.default override block (ccc_cluster). Merged order is
+# aaa,bbb,ccc, so ccc_cluster's whole-file position is 2 but its target-local
+# index is 0. Editing ccc_cluster must patch the targets block at index 0, not
+# the top-level block.
+resources:
+  jobs:
+    my_job:
+      job_clusters:
+        - job_cluster_key: aaa_cluster
+          new_cluster:
+            spark_version: $DEFAULT_SPARK_VERSION
+            node_type_id: $NODE_TYPE_ID
+            num_workers: 1
+        - job_cluster_key: bbb_cluster
+          new_cluster:
+            spark_version: $DEFAULT_SPARK_VERSION
+            node_type_id: $NODE_TYPE_ID
+            num_workers: 1
+      tasks:
+        - task_key: main
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/notebook
+          job_cluster_key: aaa_cluster
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          job_clusters:
+            - job_cluster_key: ccc_cluster
+              new_cluster:
+                spark_version: $DEFAULT_SPARK_VERSION
+                node_type_id: $NODE_TYPE_ID
+                num_workers: 1

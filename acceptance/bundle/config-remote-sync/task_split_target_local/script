@@ -1,0 +1,33 @@
+#!/bin/bash
+
+envsubst < databricks.yml.tmpl > databricks.yml
+
+cleanup() {
+  trace $CLI bundle destroy --auto-approve
+}
+trap cleanup EXIT
+
+$CLI bundle deploy
+job_id="$(read_id.py my_job)"
+
+# Merged+sorted task order is aaa_tgt, zzz_top. aaa_tgt is defined in the
+# targets block (target-local index 0); zzz_top in the top-level block
+# (top-level index 0) and also has run_if. Editing aaa_tgt's run_if must patch
+# the targets block, not zzz_top in the top-level block.
+title "Set run_if on aaa_tgt remotely (target-block task)"
+echo
+edit_resource.py jobs $job_id <<EOF
+for task in r["tasks"]:
+    if task["task_key"] == "aaa_tgt":
+        task["run_if"] = "ALL_DONE"
+EOF
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

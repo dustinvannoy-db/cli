@@ -1,0 +1,37 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Top-level block holds bbb_task, ccc_task, ddd_task; target block holds
+# aaa_task. Merged+sorted order is aaa,bbb,ccc,ddd. One sync removes ccc_task
+# (top-level block index 1) and replaces ddd_task.run_if (top-level block index
+# 2). After the remove, ddd_task's block-local index shifts from 2 to 1, so
+# block-aware indexing and adjustArrayIndex must compose. aaa_task in the target
+# block must stay untouched.
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: bbb_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/bbb
+        - task_key: ccc_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/ccc
+        - task_key: ddd_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/ddd
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa

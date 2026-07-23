@@ -1,0 +1,32 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Split tasks: top-level [mmm, nnn], target [aaa]. Merged+sorted = aaa,mmm,nnn.
+# One sync renames mmm -> ppp (top block) and aaa -> qqq (target block). Each
+# rename is a remove+add; the freed index reuse (indicesToReplaceMap) must be
+# block-scoped so the top-level add reuses mmm's slot and the target add reuses
+# aaa's slot, never crossing blocks.
+resources:
+  jobs:
+    my_job:
+      tasks:
+        - task_key: mmm_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/mmm
+        - task_key: nnn_task
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: /Users/{{workspace_user_name}}/nnn
+
+targets:
+  default:
+    mode: development
+    resources:
+      jobs:
+        my_job:
+          tasks:
+            - task_key: aaa_task
+              run_if: ALL_SUCCESS
+              notebook_task:
+                notebook_path: /Users/{{workspace_user_name}}/aaa

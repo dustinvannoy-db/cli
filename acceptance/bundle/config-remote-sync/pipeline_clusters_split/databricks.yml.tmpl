@@ -1,0 +1,30 @@
+bundle:
+  name: test-bundle-$UNIQUE_NAME
+
+# Pipeline clusters are merged by merge.ElementsByKey on the "label" key. The
+# sequence is split across the top-level block (label: default) and the
+# targets.default override block (label: maintenance). Merged order is
+# default,maintenance, so the maintenance cluster's whole-file position is 1 but
+# its target-local index is 0. Editing the maintenance cluster must patch the
+# targets block. Pipeline is non-UC so the test runs locally.
+resources:
+  pipelines:
+    my_pipeline:
+      name: test-pipeline-$UNIQUE_NAME
+      development: false
+      libraries:
+        - notebook:
+            path: /Users/{{workspace_user_name}}/notebook
+      clusters:
+        - label: default
+          num_workers: 1
+
+targets:
+  default:
+    mode: development
+    resources:
+      pipelines:
+        my_pipeline:
+          clusters:
+            - label: maintenance
+              num_workers: 1

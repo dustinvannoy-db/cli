@@ -1,0 +1,37 @@
+#!/bin/bash
+
+envsubst < databricks.yml.tmpl > databricks.yml
+
+cleanup() {
+  trace $CLI bundle destroy --auto-approve
+}
+trap cleanup EXIT
+
+$CLI bundle deploy
+job_id="$(read_id.py my_job)"
+
+# my_job's tasks are split across two config blocks in the SAME file: the
+# top-level resources block (bbb_task, ccc_task) and the targets.default
+# override block (aaa_task). After MergeJobTasks sorts by task_key the merged
+# order is aaa,bbb,ccc. yamlFileIndex must be block-aware: bbb_task's remote
+# run_if edit resolves to index 0 of the top-level block (bbb_task), not to the
+# whole-file position 1 (ccc_task).
+title "Set run_if on bbb_task remotely (merged task order: aaa,bbb,ccc)"
+echo
+edit_resource.py jobs $job_id <<EOF
+for task in r["tasks"]:
+    if task["task_key"] == "bbb_task":
+        task["run_if"] = "ALL_DONE"
+EOF
+
+title "Detect and save changes"
+echo
+cp databricks.yml databricks.yml.backup
+$CLI bundle config-remote-sync --save
+
+# The diff below must show run_if: ALL_DONE added to bbb_task (the first task in
+# the top-level block), leaving ccc_task untouched.
+title "Configuration changes"
+echo
+trace diff.py databricks.yml.backup databricks.yml
+rm databricks.yml.backup

@@ -88,7 +88,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PACKAGES: ${{ inputs.packages }}
-          # Branch the release is cut from. internal/genkit/release_tagging.py commits the
+          # Branch the release is cut from. internal/genkit/tagging.py commits the
           # changelog bump and creates the tag on this branch, and its
           # concurrent-advance guard checks this branch. Matches the ref
           # checked out above (``RELEASE_REF``): the dispatched branch for
@@ -96,9 +96,9 @@ jobs:
           DECO_TAGGING_REF: ${{ env.RELEASE_REF }}
         run: |
           if [ -n "$PACKAGES" ]; then
-            uv run --locked internal/genkit/release_tagging.py --package "$PACKAGES"
+            uv run --locked internal/genkit/tagging.py --package "$PACKAGES"
           else
-            uv run --locked internal/genkit/release_tagging.py
+            uv run --locked internal/genkit/tagging.py
           fi
 
       - name: Upload created tags artifact

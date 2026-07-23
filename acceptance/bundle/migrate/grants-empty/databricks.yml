@@ -1,0 +1,12 @@
+bundle:
+  name: test-bundle
+
+resources:
+  schemas:
+    my_schema:
+      catalog_name: main
+      name: schema_empty_grants
+      # An empty grants list produces no databricks_grants resource in terraform
+      # state, so migrate writes no grants entry. bundle plan must not then show a
+      # spurious "create" for the grants node (see makePlan in bundle/direct).
+      grants: []

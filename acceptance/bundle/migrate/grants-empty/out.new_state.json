@@ -1,0 +1,15 @@
+{
+ "state_version": 2,
+ "cli_version": "[CLI_VERSION]",
+ "lineage": "[UUID]",
+ "serial": 3,
+ "state": {
+  "resources.schemas.my_schema": {
+   "__id__": "main.schema_empty_grants",
+   "state": {
+    "catalog_name": "main",
+    "name": "schema_empty_grants"
+   }
+  }
+ }
+}
